@@ -537,7 +537,7 @@ hdrAv.style.background = ME.color;
 document.getElementById('startTime').textContent = fmtTime(new Date().toISOString());
 
 // ── Socket.IO ──────────────────────────────────────────────
-const socket = io();
+const socket = io({transports:['polling'], upgrade:false});
 let typingTimeout = null;
 const typingUsers = new Set();
 
