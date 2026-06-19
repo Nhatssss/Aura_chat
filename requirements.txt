@@ -1,5 +1,4 @@
-flask
-flask-socketio
-gunicorn
-eventlet
-pywebpush
+flask>=3.0.0
+flask-socketio>=5.3.0
+gunicorn[eventlet]>=22.0.0
+pywebpush>=1.14.0
