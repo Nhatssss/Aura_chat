@@ -11,3 +11,4 @@ static/uploads/*
 !static/uploads/.gitkeep
 *.egg-info/
 dist/
+.vapid_keys.json

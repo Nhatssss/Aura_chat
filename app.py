@@ -1,7 +1,10 @@
 from flask import Flask, render_template, request, jsonify, session, redirect, url_for
 from flask_socketio import SocketIO, emit, join_room, leave_room
 from datetime import datetime
-import sqlite3, json, os, uuid, hashlib
+from pywebpush import webpush, WebPushException
+from cryptography.hazmat.primitives import serialization
+from py_vapid import Vapid
+import sqlite3, json, os, uuid, hashlib, base64
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'aura_chat_secret_key_2024!')
@@ -23,7 +26,45 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 online_users = {}  # sid -> {user_id, username, avatar_color}
 
-# ── Database ───────────────────────────────────────────────────────────────
+# ── VAPID Keys for Push Notification ───────────────────────
+VAPID_KEYS_FILE = os.path.join(BASE_DIR, '.vapid_keys.json')
+
+def load_or_generate_vapid():
+    # 1. Try env vars
+    priv = os.environ.get('VAPID_PRIVATE_KEY')
+    pub  = os.environ.get('VAPID_PUBLIC_KEY_B64')
+    if priv and pub:
+        return priv, pub
+
+    # 2. Try file
+    if os.path.exists(VAPID_KEYS_FILE):
+        with open(VAPID_KEYS_FILE) as f:
+            d = json.load(f)
+            return d['private_key'], d['public_key']
+
+    # 3. Generate new keys (first run)
+    print("  -> Generating VAPID keys...")
+    v = Vapid()
+    v.generate_keys()
+    priv_pem = v.private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption()
+    ).decode()
+    pub_raw = v.public_key.public_bytes(
+        encoding=serialization.Encoding.X962,
+        format=serialization.PublicFormat.UncompressedPoint
+    )
+    pub_b64 = base64.urlsafe_b64encode(pub_raw).rstrip(b'=').decode()
+
+    with open(VAPID_KEYS_FILE, 'w') as f:
+        json.dump({"private_key": priv_pem, "public_key": pub_b64}, f)
+    print("  -> VAPID keys saved to", VAPID_KEYS_FILE)
+    return priv_pem, pub_b64
+
+VAPID_PRIVATE_KEY, VAPID_PUBLIC_KEY_B64 = load_or_generate_vapid()
+
+# ── Database ───────────────────────────────────────────────
 def get_db():
     db = sqlite3.connect(DB_PATH)
     db.row_factory = sqlite3.Row
@@ -51,55 +92,54 @@ def init_db():
             image_url   TEXT,
             timestamp   TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS push_subscriptions (
+            endpoint TEXT PRIMARY KEY,
+            p256dh   TEXT NOT NULL,
+            auth     TEXT NOT NULL,
+            user_id  TEXT,
+            created_at TEXT NOT NULL
+        );
         CREATE INDEX IF NOT EXISTS idx_msg_time ON messages(timestamp);
     """)
     db.commit()
     db.close()
 
-# ── Migrate JSON -> SQLite (chạy 1 lần) ────────────────────
+# ── Migrate JSON -> SQLite ─────────────────────────────────
 def migrate_json_to_sqlite():
     accounts_f = os.path.join(DATA_DIR, 'accounts.json')
     messages_f = os.path.join(DATA_DIR, 'messages.json')
     if not os.path.exists(accounts_f) and not os.path.exists(messages_f):
-        return  # nothing to migrate
+        return
 
     db = get_db()
     cur = db.execute("SELECT COUNT(*) as c FROM users").fetchone()['c']
     if cur > 0:
         db.close()
-        return  # already have data
+        return
     print("  -> Migrating JSON to SQLite ...")
 
-    # Migrate users
     if os.path.exists(accounts_f):
         try:
             with open(accounts_f, 'r', encoding='utf-8') as f:
                 accounts = json.load(f)
             for u in accounts.get('users', []):
-                db.execute(
-                    "INSERT OR IGNORE INTO users VALUES (?,?,?,?,?)",
+                db.execute("INSERT OR IGNORE INTO users VALUES (?,?,?,?,?)",
                     (u['id'], u['username'], u['password'],
-                     u.get('avatar_color', '#00e5ff'), u.get('created_at', ''))
-                )
+                     u.get('avatar_color', '#00e5ff'), u.get('created_at', '')))
         except: pass
 
-    # Migrate messages
     if os.path.exists(messages_f):
         try:
             with open(messages_f, 'r', encoding='utf-8') as f:
                 msgs = json.load(f)
             for m in msgs.get('messages', []):
-                db.execute(
-                    "INSERT OR IGNORE INTO messages VALUES (?,?,?,?,?,?,?,?)",
+                db.execute("INSERT OR IGNORE INTO messages VALUES (?,?,?,?,?,?,?,?)",
                     (m['id'], m['sender_id'], m['sender_name'], m['avatar_color'],
-                     m.get('content', ''), m.get('type', 'text'), m.get('image_url'),
-                     m['timestamp'])
-                )
+                     m.get('content', ''), m.get('type', 'text'), m.get('image_url'), m['timestamp']))
         except: pass
 
     db.commit()
     db.close()
-    # Rename old JSON files so we don't re-import
     for f in [accounts_f, messages_f]:
         if os.path.exists(f):
             os.rename(f, f + '.bak')
@@ -108,7 +148,40 @@ def migrate_json_to_sqlite():
 init_db()
 migrate_json_to_sqlite()
 
-# ── Helpers ────────────────────────────────────────────────────────────────
+# ── Push Notification Helper ──────────────────────────────
+def send_push_notification(title, body, url='/'):
+    db = get_db()
+    subs = db.execute("SELECT * FROM push_subscriptions").fetchall()
+    db.close()
+    if not subs:
+        return
+
+    payload = json.dumps({"title": title, "body": body, "url": url})
+    stale = []
+
+    for sub in subs:
+        try:
+            webpush(
+                subscription_info={
+                    "endpoint": sub['endpoint'],
+                    "keys": {"p256dh": sub['p256dh'], "auth": sub['auth']}
+                },
+                data=payload,
+                vapid_private_key=VAPID_PRIVATE_KEY,
+                vapid_claims={"sub": "mailto:aura@aura-chat.local"}
+            )
+        except WebPushException as ex:
+            if ex.response and ex.response.status_code in (410, 404):
+                stale.append(sub['endpoint'])
+
+    if stale:
+        db = get_db()
+        for ep in stale:
+            db.execute("DELETE FROM push_subscriptions WHERE endpoint=?", (ep,))
+        db.commit()
+        db.close()
+
+# ── Helpers ─────────────────────────────────────────────────
 def hash_pw(pw):
     return hashlib.sha256(pw.encode('utf-8')).hexdigest()
 
@@ -123,12 +196,11 @@ def unique_online():
             out.append(u)
     return out
 
-# ── Routes ─────────────────────────────────────────────────────────────────
+# ── Routes ─────────────────────────────────────────────────
 @app.route('/')
 def index():
     return redirect(url_for('chat') if 'user_id' in session else url_for('login'))
 
-# ---------- Login ----------
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'GET':
@@ -151,7 +223,6 @@ def login():
         return jsonify({'success': True})
     return jsonify({'success': False, 'message': 'Sai tên đăng nhập hoặc mật khẩu'})
 
-# ---------- Register ----------
 @app.route('/register', methods=['POST'])
 def register():
     d     = request.get_json()
@@ -177,10 +248,7 @@ def register():
     uid   = str(uuid.uuid4())
     now   = datetime.now().isoformat()
 
-    db.execute(
-        "INSERT INTO users VALUES (?,?,?,?,?)",
-        (uid, uname, hash_pw(pw), color, now)
-    )
+    db.execute("INSERT INTO users VALUES (?,?,?,?,?)", (uid, uname, hash_pw(pw), color, now))
     db.commit()
     db.close()
 
@@ -203,7 +271,43 @@ def chat():
         user_id=session['user_id'],
         avatar_color=session['avatar_color'])
 
-# ---------- API ----------
+# ── Push Notification API ─────────────────────────────────
+@app.route('/api/vapid-public-key')
+def api_vapid_public_key():
+    return jsonify({'key': VAPID_PUBLIC_KEY_B64})
+
+@app.route('/api/subscribe', methods=['POST'])
+def api_subscribe():
+    if 'user_id' not in session:
+        return jsonify({'error': 'Unauthorized'}), 401
+    d = request.get_json()
+    endpoint = d.get('endpoint', '')
+    keys = d.get('keys', {})
+    if not endpoint or not keys.get('p256dh') or not keys.get('auth'):
+        return jsonify({'error': 'Invalid subscription'}), 400
+
+    db = get_db()
+    db.execute(
+        "INSERT OR REPLACE INTO push_subscriptions VALUES (?,?,?,?,?)",
+        (endpoint, keys['p256dh'], keys['auth'],
+         session['user_id'], datetime.now().isoformat())
+    )
+    db.commit()
+    db.close()
+    return jsonify({'success': True})
+
+@app.route('/api/unsubscribe', methods=['POST'])
+def api_unsubscribe():
+    d = request.get_json()
+    endpoint = d.get('endpoint', '')
+    if endpoint:
+        db = get_db()
+        db.execute("DELETE FROM push_subscriptions WHERE endpoint=?", (endpoint,))
+        db.commit()
+        db.close()
+    return jsonify({'success': True})
+
+# ── Chat API ──────────────────────────────────────────────
 @app.route('/api/messages')
 def api_messages():
     if 'user_id' not in session:
@@ -213,8 +317,7 @@ def api_messages():
         "SELECT * FROM messages ORDER BY timestamp DESC LIMIT 100"
     ).fetchall()
     db.close()
-    msgs = [dict(r) for r in reversed(rows)]
-    return jsonify(msgs)
+    return jsonify([dict(r) for r in reversed(rows)])
 
 @app.route('/api/upload', methods=['POST'])
 def api_upload():
@@ -249,11 +352,15 @@ def api_upload():
     db.close()
 
     socketio.emit('new_message', msg, room='chat_room')
+    send_push_notification(
+        title=f"📷 {session['username']}",
+        body="Đã gửi một ảnh",
+        url='/'
+    )
     return jsonify({'success': True, 'message': msg})
 
-# ── Socket.IO ──────────────────────────────────────────────────────────────
+# ── Socket.IO ──────────────────────────────────────────────
 def trim_messages(db):
-    """Giữ tối đa MAX_MSGS tin nhắn, xoá cũ nhất."""
     count = db.execute("SELECT COUNT(*) as c FROM messages").fetchone()['c']
     if count >= MAX_MSGS:
         to_delete = count - MAX_MSGS + 1
@@ -322,6 +429,11 @@ def on_message(data):
     db.close()
 
     emit('new_message', msg, room='chat_room')
+    send_push_notification(
+        title=f"💬 {session['username']}",
+        body=content[:100] + ('...' if len(content) > 100 else ''),
+        url='/'
+    )
 
 @socketio.on('typing')
 def on_typing(data):
@@ -332,12 +444,12 @@ def on_typing(data):
         'is_typing': data.get('is_typing', False)
     }, room='chat_room', include_self=False)
 
-# ── Entry point ────────────────────────────────────────────────────────────
+# ── Entry point ────────────────────────────────────────────
 if __name__ == '__main__':
+    PORT = int(os.environ.get('PORT', 5000))
     print("=" * 52)
-    print("  AURA CHAT  -  SQLite mode (port %d)" % PORT)
+    print("  AURA CHAT  -  SQLite + Push Notifications")
     print("  Mở trinh duyet: http://localhost:%d" % PORT)
     print("=" * 52 + "\n")
-    PORT = int(os.environ.get('PORT', 5000))
     socketio.run(app, host='0.0.0.0', port=PORT, debug=False,
                  allow_unsafe_werkzeug=True)
