@@ -10,8 +10,12 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'aura_chat_secret_key_2024!')
 app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024  # 10 MB
 
-ASYNC_MODE = os.environ.get('ASYNC_MODE', 'threading')
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode=ASYNC_MODE)
+# PythonAnywhere doesn't support WebSocket — force polling
+socketio = SocketIO(app,
+    cors_allowed_origins="*",
+    async_mode='threading',
+    allow_upgrades=False,
+    transports=['polling'])
 
 # ── Paths ──────────────────────────────────────────────────────────────────
 BASE_DIR    = os.path.dirname(os.path.abspath(__file__))
