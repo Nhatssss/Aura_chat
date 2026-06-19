@@ -10,12 +10,7 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'aura_chat_secret_key_2024!')
 app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024  # 10 MB
 
-# PythonAnywhere doesn't support WebSocket — force polling
-socketio = SocketIO(app,
-    cors_allowed_origins="*",
-    async_mode='threading',
-    allow_upgrades=False,
-    transports=['polling'])
+socketio = SocketIO(app, cors_allowed_origins="*")
 
 # ── Paths ──────────────────────────────────────────────────────────────────
 BASE_DIR    = os.path.dirname(os.path.abspath(__file__))
@@ -453,7 +448,7 @@ if __name__ == '__main__':
     PORT = int(os.environ.get('PORT', 5000))
     print("=" * 52)
     print("  AURA CHAT  -  SQLite + Push Notifications")
-    print("  Mở trinh duyet: http://localhost:%d" % PORT)
+    print("  Open browser: http://localhost:%d" % PORT)
     print("=" * 52 + "\n")
     socketio.run(app, host='0.0.0.0', port=PORT, debug=False,
                  allow_unsafe_werkzeug=True)
