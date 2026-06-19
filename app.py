@@ -1,46 +1,114 @@
 from flask import Flask, render_template, request, jsonify, session, redirect, url_for
 from flask_socketio import SocketIO, emit, join_room, leave_room
-from werkzeug.utils import secure_filename
 from datetime import datetime
-from threading import Lock
-import json, os, uuid, hashlib
+import sqlite3, json, os, uuid, hashlib
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'aura_chat_secret_key_2024!')
 app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024  # 10 MB
 
-# Use eventlet for production, threading for dev
 ASYNC_MODE = os.environ.get('ASYNC_MODE', 'threading')
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode=ASYNC_MODE)
 
 # ── Paths ──────────────────────────────────────────────────────────────────
-DATA_DIR    = 'data'
-ACCOUNTS_F  = os.path.join(DATA_DIR, 'accounts.json')
-MESSAGES_F  = os.path.join(DATA_DIR, 'messages.json')
-UPLOAD_DIR  = os.path.join('static', 'uploads')
+BASE_DIR    = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR    = os.path.join(BASE_DIR, 'data')
+DB_PATH     = os.path.join(DATA_DIR, 'aura.db')
+UPLOAD_DIR  = os.path.join(BASE_DIR, 'static', 'uploads')
 ALLOWED_EXT = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
 MAX_MSGS    = 300
 
 os.makedirs(DATA_DIR,   exist_ok=True)
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-file_lock    = Lock()
-online_users = {}          # sid -> {user_id, username, avatar_color}
+online_users = {}  # sid -> {user_id, username, avatar_color}
+
+# ── Database ───────────────────────────────────────────────────────────────
+def get_db():
+    db = sqlite3.connect(DB_PATH)
+    db.row_factory = sqlite3.Row
+    db.execute("PRAGMA journal_mode=WAL")
+    db.execute("PRAGMA foreign_keys=ON")
+    return db
+
+def init_db():
+    db = get_db()
+    db.executescript("""
+        CREATE TABLE IF NOT EXISTS users (
+            id        TEXT PRIMARY KEY,
+            username  TEXT UNIQUE NOT NULL,
+            password  TEXT NOT NULL,
+            avatar_color TEXT NOT NULL DEFAULT '#00e5ff',
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS messages (
+            id          TEXT PRIMARY KEY,
+            sender_id   TEXT NOT NULL,
+            sender_name TEXT NOT NULL,
+            avatar_color TEXT NOT NULL,
+            content     TEXT DEFAULT '',
+            type        TEXT NOT NULL DEFAULT 'text',
+            image_url   TEXT,
+            timestamp   TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_msg_time ON messages(timestamp);
+    """)
+    db.commit()
+    db.close()
+
+# ── Migrate JSON -> SQLite (chạy 1 lần) ────────────────────
+def migrate_json_to_sqlite():
+    accounts_f = os.path.join(DATA_DIR, 'accounts.json')
+    messages_f = os.path.join(DATA_DIR, 'messages.json')
+    if not os.path.exists(accounts_f) and not os.path.exists(messages_f):
+        return  # nothing to migrate
+
+    db = get_db()
+    cur = db.execute("SELECT COUNT(*) as c FROM users").fetchone()['c']
+    if cur > 0:
+        db.close()
+        return  # already have data
+    print("  -> Migrating JSON to SQLite ...")
+
+    # Migrate users
+    if os.path.exists(accounts_f):
+        try:
+            with open(accounts_f, 'r', encoding='utf-8') as f:
+                accounts = json.load(f)
+            for u in accounts.get('users', []):
+                db.execute(
+                    "INSERT OR IGNORE INTO users VALUES (?,?,?,?,?)",
+                    (u['id'], u['username'], u['password'],
+                     u.get('avatar_color', '#00e5ff'), u.get('created_at', ''))
+                )
+        except: pass
+
+    # Migrate messages
+    if os.path.exists(messages_f):
+        try:
+            with open(messages_f, 'r', encoding='utf-8') as f:
+                msgs = json.load(f)
+            for m in msgs.get('messages', []):
+                db.execute(
+                    "INSERT OR IGNORE INTO messages VALUES (?,?,?,?,?,?,?,?)",
+                    (m['id'], m['sender_id'], m['sender_name'], m['avatar_color'],
+                     m.get('content', ''), m.get('type', 'text'), m.get('image_url'),
+                     m['timestamp'])
+                )
+        except: pass
+
+    db.commit()
+    db.close()
+    # Rename old JSON files so we don't re-import
+    for f in [accounts_f, messages_f]:
+        if os.path.exists(f):
+            os.rename(f, f + '.bak')
+    print("  OK - Migration done")
+
+init_db()
+migrate_json_to_sqlite()
 
 # ── Helpers ────────────────────────────────────────────────────────────────
-def load_json(path, default):
-    try:
-        if os.path.exists(path):
-            with open(path, 'r', encoding='utf-8') as f:
-                return json.load(f)
-    except Exception:
-        pass
-    return default
-
-def save_json(path, data):
-    with open(path, 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-
 def hash_pw(pw):
     return hashlib.sha256(pw.encode('utf-8')).hexdigest()
 
@@ -48,19 +116,12 @@ def allowed(fn):
     return '.' in fn and fn.rsplit('.', 1)[1].lower() in ALLOWED_EXT
 
 def unique_online():
-    """Deduplicate online_users by user_id (same user, multiple tabs)."""
     seen, out = set(), []
     for u in online_users.values():
         if u['user_id'] not in seen:
             seen.add(u['user_id'])
             out.append(u)
     return out
-
-# ── Seed JSON files if missing ─────────────────────────────────────────────
-if not os.path.exists(ACCOUNTS_F):
-    save_json(ACCOUNTS_F, {"users": []})
-if not os.path.exists(MESSAGES_F):
-    save_json(MESSAGES_F, {"messages": []})
 
 # ── Routes ─────────────────────────────────────────────────────────────────
 @app.route('/')
@@ -75,13 +136,19 @@ def login():
     d = request.get_json()
     uname = d.get('username', '').strip()
     pw    = d.get('password', '')
-    accounts = load_json(ACCOUNTS_F, {"users": []})
-    for u in accounts['users']:
-        if u['username'].lower() == uname.lower() and u['password'] == hash_pw(pw):
-            session['user_id']      = u['id']
-            session['username']     = u['username']
-            session['avatar_color'] = u.get('avatar_color', '#00e5ff')
-            return jsonify({'success': True})
+
+    db = get_db()
+    row = db.execute(
+        "SELECT * FROM users WHERE LOWER(username)=? AND password=?",
+        (uname.lower(), hash_pw(pw))
+    ).fetchone()
+    db.close()
+
+    if row:
+        session['user_id']      = row['id']
+        session['username']     = row['username']
+        session['avatar_color'] = row['avatar_color']
+        return jsonify({'success': True})
     return jsonify({'success': False, 'message': 'Sai tên đăng nhập hoặc mật khẩu'})
 
 # ---------- Register ----------
@@ -96,22 +163,28 @@ def register():
         return jsonify({'success': False, 'message': 'Mật khẩu tối thiểu 6 ký tự'})
 
     COLORS = ['#00e5ff','#7c3aed','#10b981','#f59e0b','#ef4444','#ec4899','#06b6d4','#8b5cf6']
-    with file_lock:
-        accounts = load_json(ACCOUNTS_F, {"users": []})
-        if any(u['username'].lower() == uname.lower() for u in accounts['users']):
-            return jsonify({'success': False, 'message': 'Tên đăng nhập đã tồn tại'})
-        color = COLORS[len(accounts['users']) % len(COLORS)]
-        new_u = {
-            'id': str(uuid.uuid4()),
-            'username': uname,
-            'password': hash_pw(pw),
-            'avatar_color': color,
-            'created_at': datetime.now().isoformat()
-        }
-        accounts['users'].append(new_u)
-        save_json(ACCOUNTS_F, accounts)
 
-    session['user_id']      = new_u['id']
+    db = get_db()
+    exists = db.execute(
+        "SELECT 1 FROM users WHERE LOWER(username)=?", (uname.lower(),)
+    ).fetchone()
+    if exists:
+        db.close()
+        return jsonify({'success': False, 'message': 'Tên đăng nhập đã tồn tại'})
+
+    count = db.execute("SELECT COUNT(*) as c FROM users").fetchone()['c']
+    color = COLORS[count % len(COLORS)]
+    uid   = str(uuid.uuid4())
+    now   = datetime.now().isoformat()
+
+    db.execute(
+        "INSERT INTO users VALUES (?,?,?,?,?)",
+        (uid, uname, hash_pw(pw), color, now)
+    )
+    db.commit()
+    db.close()
+
+    session['user_id']      = uid
     session['username']     = uname
     session['avatar_color'] = color
     return jsonify({'success': True})
@@ -135,8 +208,13 @@ def chat():
 def api_messages():
     if 'user_id' not in session:
         return jsonify([]), 401
-    data = load_json(MESSAGES_F, {"messages": []})
-    return jsonify(data['messages'][-100:])
+    db = get_db()
+    rows = db.execute(
+        "SELECT * FROM messages ORDER BY timestamp DESC LIMIT 100"
+    ).fetchall()
+    db.close()
+    msgs = [dict(r) for r in reversed(rows)]
+    return jsonify(msgs)
 
 @app.route('/api/upload', methods=['POST'])
 def api_upload():
@@ -159,16 +237,31 @@ def api_upload():
         'image_url':    f'/static/uploads/{fname}',
         'timestamp':    datetime.now().isoformat()
     }
-    with file_lock:
-        data = load_json(MESSAGES_F, {"messages": []})
-        data['messages'].append(msg)
-        if len(data['messages']) > MAX_MSGS:
-            data['messages'] = data['messages'][-MAX_MSGS:]
-        save_json(MESSAGES_F, data)
+
+    db = get_db()
+    trim_messages(db)
+    db.execute(
+        "INSERT INTO messages VALUES (?,?,?,?,?,?,?,?)",
+        (msg['id'], msg['sender_id'], msg['sender_name'], msg['avatar_color'],
+         msg['content'], msg['type'], msg['image_url'], msg['timestamp'])
+    )
+    db.commit()
+    db.close()
+
     socketio.emit('new_message', msg, room='chat_room')
     return jsonify({'success': True, 'message': msg})
 
 # ── Socket.IO ──────────────────────────────────────────────────────────────
+def trim_messages(db):
+    """Giữ tối đa MAX_MSGS tin nhắn, xoá cũ nhất."""
+    count = db.execute("SELECT COUNT(*) as c FROM messages").fetchone()['c']
+    if count >= MAX_MSGS:
+        to_delete = count - MAX_MSGS + 1
+        db.execute(
+            "DELETE FROM messages WHERE id IN (SELECT id FROM messages ORDER BY timestamp ASC LIMIT ?)",
+            (to_delete,)
+        )
+
 @socketio.on('connect')
 def on_connect():
     if 'user_id' not in session:
@@ -217,12 +310,17 @@ def on_message(data):
         'image_url':    None,
         'timestamp':    datetime.now().isoformat()
     }
-    with file_lock:
-        data2 = load_json(MESSAGES_F, {"messages": []})
-        data2['messages'].append(msg)
-        if len(data2['messages']) > MAX_MSGS:
-            data2['messages'] = data2['messages'][-MAX_MSGS:]
-        save_json(MESSAGES_F, data2)
+
+    db = get_db()
+    trim_messages(db)
+    db.execute(
+        "INSERT INTO messages VALUES (?,?,?,?,?,?,?,?)",
+        (msg['id'], msg['sender_id'], msg['sender_name'], msg['avatar_color'],
+         msg['content'], msg['type'], msg['image_url'], msg['timestamp'])
+    )
+    db.commit()
+    db.close()
+
     emit('new_message', msg, room='chat_room')
 
 @socketio.on('typing')
@@ -236,9 +334,9 @@ def on_typing(data):
 
 # ── Entry point ────────────────────────────────────────────────────────────
 if __name__ == '__main__':
-    print("\n" + "=" * 52)
-    print("  ⬡  AURA CHAT  –  Server khởi động")
-    print("  Mở trình duyệt: http://localhost:5000")
+    print("=" * 52)
+    print("  AURA CHAT  -  SQLite mode (port %d)" % PORT)
+    print("  Mở trinh duyet: http://localhost:%d" % PORT)
     print("=" * 52 + "\n")
     PORT = int(os.environ.get('PORT', 5000))
     socketio.run(app, host='0.0.0.0', port=PORT, debug=False,

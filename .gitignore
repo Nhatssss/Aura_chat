@@ -5,6 +5,8 @@ venv/
 .venv/
 data/accounts.json
 data/messages.json
+data/aura.db
+data/*.bak
 static/uploads/*
 !static/uploads/.gitkeep
 *.egg-info/
