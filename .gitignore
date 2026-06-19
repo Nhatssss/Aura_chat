@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.env
+venv/
+.venv/
+data/accounts.json
+data/messages.json
+static/uploads/*
+!static/uploads/.gitkeep
+*.egg-info/
+dist/

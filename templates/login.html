@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#030b18">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="AURA">
+<link rel="manifest" href="/static/manifest.json">
+<link rel="icon" type="image/png" sizes="192x192" href="/static/icons/icon-192.png">
+<link rel="icon" type="image/png" sizes="512x512" href="/static/icons/icon-512.png">
+<link rel="apple-touch-icon" href="/static/icons/icon-512.png">
+<title>AURA CHAT — Đăng Nhập</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --cyan:   #00e5ff;
+  --purple: #7c3aed;
+  --green:  #10b981;
+  --bg:     #030b18;
+  --panel:  rgba(4, 15, 38, 0.92);
+  --border: rgba(0, 229, 255, 0.22);
+  --text:   #cce8f4;
+  --dim:    #4a7a8a;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+/* ── Animated grid background ───────────────────────────── */
+.grid-bg {
+  position: fixed; inset: 0; z-index: 0;
+  background-image:
+    linear-gradient(rgba(0,229,255,.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0,229,255,.04) 1px, transparent 1px);
+  background-size: 50px 50px;
+  animation: gridDrift 20s linear infinite;
+}
+@keyframes gridDrift { to { background-position: 50px 50px; } }
+
+/* Radial glow */
+.glow-center {
+  position: fixed; inset: 0; z-index: 0;
+  background: radial-gradient(ellipse 60% 60% at 50% 50%,
+    rgba(0,229,255,.06) 0%, transparent 70%);
+}
+
+/* Particles */
+.particle {
+  position: fixed; border-radius: 50%;
+  background: var(--cyan); opacity: 0;
+  animation: float var(--d, 6s) var(--delay, 0s) ease-in-out infinite;
+}
+@keyframes float {
+  0%,100%{ opacity:0; transform:translateY(0) scale(1); }
+  20%    { opacity:.5; }
+  80%    { opacity:.3; }
+  100%   { transform:translateY(-100px) scale(.5); }
+}
+
+/* ── Card ───────────────────────────────────────────────── */
+.card {
+  position: relative; z-index: 10;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 36px 40px 40px;
+  width: min(420px, calc(100vw - 24px));
+  backdrop-filter: blur(24px);
+  box-shadow: 0 0 60px rgba(0,229,255,.08), 0 0 0 1px var(--border) inset;
+}
+.card::before {
+  content:''; position:absolute; top:-1px; left:15%; right:15%; height:1px;
+  background: linear-gradient(90deg, transparent, var(--cyan), transparent);
+}
+.card::after {
+  content:''; position:absolute; bottom:-1px; left:25%; right:25%; height:1px;
+  background: linear-gradient(90deg, transparent, rgba(124,58,237,.7), transparent);
+}
+
+/* ── Logo ───────────────────────────────────────────────── */
+.logo { display:flex; align-items:center; gap:14px; margin-bottom:28px; }
+.logo-hex {
+  width:48px; height:48px;
+  border:2px solid var(--cyan);
+  border-radius:10px;
+  display:flex; align-items:center; justify-content:center;
+  font-size:22px;
+  box-shadow: 0 0 20px rgba(0,229,255,.35);
+  animation: hexPulse 3s ease-in-out infinite;
+}
+@keyframes hexPulse {
+  0%,100%{ box-shadow:0 0 20px rgba(0,229,255,.35); }
+  50%    { box-shadow:0 0 35px rgba(0,229,255,.6); }
+}
+.logo-name { font-size:22px; font-weight:800; letter-spacing:5px; color:var(--cyan);
+  text-shadow:0 0 20px rgba(0,229,255,.7); }
+.logo-sub  { font-size:9px;  letter-spacing:3px; color:var(--dim); margin-top:2px; }
+
+/* ── Tabs ───────────────────────────────────────────────── */
+.tabs { display:flex; gap:0; margin-bottom:28px; border:1px solid var(--border); border-radius:6px; overflow:hidden; }
+.tab {
+  flex:1; padding:9px; background:transparent; border:none; cursor:pointer;
+  color:var(--dim); font-size:11px; letter-spacing:2px; font-weight:700;
+  transition:all .25s;
+}
+.tab.active { background:rgba(0,229,255,.1); color:var(--cyan); border-bottom:2px solid var(--cyan); }
+.tab:hover:not(.active) { color:var(--text); background:rgba(255,255,255,.03); }
+
+/* ── Form ───────────────────────────────────────────────── */
+.form-group { margin-bottom:18px; }
+.form-group label { display:block; font-size:9px; letter-spacing:2px; color:var(--dim); margin-bottom:7px; }
+.form-group input {
+  width:100%; padding:11px 14px;
+  background: rgba(0,229,255,.04);
+  border:1px solid var(--border);
+  border-radius:6px; color:var(--text);
+  font-size:14px; outline:none; transition:all .2s;
+}
+.form-group input:focus {
+  border-color:rgba(0,229,255,.6);
+  box-shadow:0 0 14px rgba(0,229,255,.12);
+  background:rgba(0,229,255,.07);
+}
+.form-group input::placeholder { color:var(--dim); font-size:13px; }
+
+/* ── Button ─────────────────────────────────────────────── */
+.btn-primary {
+  width:100%; padding:12px; margin-top:6px;
+  background: linear-gradient(135deg, rgba(0,229,255,.15), rgba(124,58,237,.15));
+  border:1px solid rgba(0,229,255,.5); border-radius:6px;
+  color:var(--cyan); font-size:12px; letter-spacing:3px; font-weight:700;
+  cursor:pointer; transition:all .25s; position:relative; overflow:hidden;
+}
+.btn-primary:hover {
+  background: linear-gradient(135deg, rgba(0,229,255,.25), rgba(124,58,237,.25));
+  box-shadow:0 0 25px rgba(0,229,255,.25);
+  transform:translateY(-1px);
+}
+.btn-primary:active { transform:translateY(0); }
+.btn-primary.loading { opacity:.6; pointer-events:none; }
+
+/* ── Error / Info ───────────────────────────────────────── */
+.msg { margin-top:14px; padding:9px 13px; border-radius:6px; font-size:12px; display:none; }
+.msg.error { background:rgba(239,68,68,.12); border:1px solid rgba(239,68,68,.4); color:#f87171; display:block; }
+.msg.success { background:rgba(16,185,129,.12); border:1px solid rgba(16,185,129,.4); color:#34d399; display:block; }
+
+/* ── Footer ─────────────────────────────────────────────── */
+.card-footer { margin-top:22px; text-align:center; font-size:10px; color:var(--dim); letter-spacing:1px; }
+
+/* ── RESPONSIVE ──────────────────────── */
+@media(max-width:479px){
+  .card          { padding:28px 20px 32px; border-radius:10px; }
+  .logo          { margin-bottom:22px; gap:10px; }
+  .logo-hex      { width:40px;height:40px;font-size:18px; }
+  .logo-name     { font-size:18px;letter-spacing:4px; }
+  .logo-sub      { font-size:8px; }
+  .tabs          { margin-bottom:20px; }
+  .form-group input{ padding:13px 14px;font-size:15px; }
+  .btn-primary   { padding:14px;font-size:12px; }
+  .card-footer   { font-size:9px; }
+}
+
+/* Scan line animation on card */
+@keyframes scanLine {
+  0%  { top:-2px; opacity:0; }
+  10% { opacity:.6; }
+  90% { opacity:.3; }
+  100%{ top:102%; opacity:0; }
+}
+.scan-line {
+  position:absolute; left:0; right:0; height:1px;
+  background:linear-gradient(90deg, transparent, rgba(0,229,255,.5), transparent);
+  animation:scanLine 4s ease-in-out infinite;
+  pointer-events:none;
+}
+</style>
+</head>
+<body>
+
+<div class="grid-bg"></div>
+<div class="glow-center"></div>
+
+<!-- Particles -->
+<div id="particles"></div>
+
+<div class="card">
+  <div class="scan-line"></div>
+
+  <!-- Logo -->
+  <div class="logo">
+    <div class="logo-hex">⬡</div>
+    <div>
+      <div class="logo-name">AURA</div>
+      <div class="logo-sub">MULTI-USER CHAT SYSTEM</div>
+    </div>
+  </div>
+
+  <!-- Tabs -->
+  <div class="tabs">
+    <button class="tab active" onclick="switchTab('login')" id="tabLogin">ĐĂNG NHẬP</button>
+    <button class="tab"        onclick="switchTab('register')" id="tabRegister">ĐĂNG KÝ</button>
+  </div>
+
+  <!-- Login Form -->
+  <div id="fLogin">
+    <div class="form-group">
+      <label>TÊN ĐĂNG NHẬP</label>
+      <input id="lUser" type="text" placeholder="Nhập tên đăng nhập..." autocomplete="username">
+    </div>
+    <div class="form-group">
+      <label>MẬT KHẨU</label>
+      <input id="lPass" type="password" placeholder="Nhập mật khẩu..." autocomplete="current-password">
+    </div>
+    <button class="btn-primary" onclick="doLogin()" id="btnLogin">ĐĂNG NHẬP →</button>
+  </div>
+
+  <!-- Register Form -->
+  <div id="fReg" style="display:none">
+    <div class="form-group">
+      <label>TÊN ĐĂNG NHẬP <span style="color:#4a7a8a">(≥3 ký tự)</span></label>
+      <input id="rUser" type="text" placeholder="Chọn tên đăng nhập..." autocomplete="username">
+    </div>
+    <div class="form-group">
+      <label>MẬT KHẨU <span style="color:#4a7a8a">(≥6 ký tự)</span></label>
+      <input id="rPass" type="password" placeholder="Tạo mật khẩu..." autocomplete="new-password">
+    </div>
+    <div class="form-group">
+      <label>XÁC NHẬN MẬT KHẨU</label>
+      <input id="rPass2" type="password" placeholder="Nhập lại mật khẩu..." autocomplete="new-password">
+    </div>
+    <button class="btn-primary" onclick="doRegister()" id="btnReg">TẠO TÀI KHOẢN →</button>
+  </div>
+
+  <div class="msg" id="alertMsg"></div>
+
+  <div class="card-footer">AURA CHAT v1.0 · Chạy cục bộ · Dữ liệu lưu JSON</div>
+</div>
+
+<script>
+// ── Particles ──────────────────────────────────────────────────────────────
+(function(){
+  const wrap = document.getElementById('particles');
+  const COLORS = ['#00e5ff','#7c3aed','rgba(0,229,255,.4)'];
+  for(let i=0;i<22;i++){
+    const el = document.createElement('div');
+    el.className = 'particle';
+    const size = Math.random()*3+1;
+    el.style.cssText = `
+      width:${size}px;height:${size}px;
+      left:${Math.random()*100}%;top:${40+Math.random()*55}%;
+      background:${COLORS[Math.floor(Math.random()*COLORS.length)]};
+      --d:${5+Math.random()*8}s;
+      --delay:${Math.random()*6}s;
+    `;
+    wrap.appendChild(el);
+  }
+})();
+
+// ── Tab switching ──────────────────────────────────────────────────────────
+function switchTab(t){
+  document.getElementById('fLogin').style.display = t==='login'  ? '' : 'none';
+  document.getElementById('fReg')  .style.display = t==='register'?'' : 'none';
+  document.getElementById('tabLogin')   .classList.toggle('active', t==='login');
+  document.getElementById('tabRegister').classList.toggle('active', t==='register');
+  clearMsg();
+}
+
+// ── Alert helper ───────────────────────────────────────────────────────────
+function showMsg(txt, type='error'){
+  const el = document.getElementById('alertMsg');
+  el.textContent = txt;
+  el.className = `msg ${type}`;
+}
+function clearMsg(){ document.getElementById('alertMsg').className='msg'; }
+
+// ── Login ──────────────────────────────────────────────────────────────────
+async function doLogin(){
+  const u = document.getElementById('lUser').value.trim();
+  const p = document.getElementById('lPass').value;
+  if(!u||!p){ showMsg('Vui lòng nhập đầy đủ thông tin'); return; }
+  setLoading('btnLogin', true);
+  try{
+    const r = await fetch('/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u,password:p})});
+    const d = await r.json();
+    if(d.success){ location.href='/chat'; }
+    else{ showMsg(d.message||'Đăng nhập thất bại'); }
+  }catch{ showMsg('Lỗi kết nối đến server'); }
+  setLoading('btnLogin', false);
+}
+
+// ── Register ───────────────────────────────────────────────────────────────
+async function doRegister(){
+  const u  = document.getElementById('rUser') .value.trim();
+  const p  = document.getElementById('rPass') .value;
+  const p2 = document.getElementById('rPass2').value;
+  if(!u||!p){ showMsg('Vui lòng nhập đầy đủ thông tin'); return; }
+  if(p!==p2){ showMsg('Mật khẩu xác nhận không khớp'); return; }
+  setLoading('btnReg', true);
+  try{
+    const r = await fetch('/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u,password:p})});
+    const d = await r.json();
+    if(d.success){ location.href='/chat'; }
+    else{ showMsg(d.message||'Đăng ký thất bại'); }
+  }catch{ showMsg('Lỗi kết nối đến server'); }
+  setLoading('btnReg', false);
+}
+
+function setLoading(id, on){
+  const b = document.getElementById(id);
+  b.classList.toggle('loading', on);
+  b.textContent = on ? 'ĐANG XỬ LÝ...' : (id==='btnLogin' ? 'ĐĂNG NHẬP →' : 'TẠO TÀI KHOẢN →');
+}
+
+// ── Enter key support ──────────────────────────────────────────────────────
+document.addEventListener('keydown', e=>{
+  if(e.key!=='Enter') return;
+  if(document.getElementById('fLogin').style.display!=='none') doLogin();
+  else doRegister();
+});
+</script>
+</body>
+</html>
