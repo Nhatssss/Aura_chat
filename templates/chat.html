@@ -389,12 +389,30 @@ header {
   .panel-header   { padding:9px 12px; }
 }
 
-/* iOS safe area */
+/* ── iOS / PWA Safe Area ─────────────────────────────── */
 @supports(padding-bottom:env(safe-area-inset-bottom)){
   .input-bar{ padding-bottom:calc(7px + env(safe-area-inset-bottom)); }
 }
+@supports(padding-top:env(safe-area-inset-top)){
+  header{ padding-top:env(safe-area-inset-top);
+          height:calc(52px + env(safe-area-inset-top));
+          min-height:calc(52px + env(safe-area-inset-top)); }
+  .panel-left{ top:calc(52px + env(safe-area-inset-top)); }
+  .drawer-overlay{ top:calc(52px + env(safe-area-inset-top)); }
+  .lightbox{ padding-top:env(safe-area-inset-top);
+             padding-bottom:env(safe-area-inset-bottom); }
+}
 /* Dynamic viewport (mobile browser chrome) */
 @supports(height:100dvh){ body{ height:100dvh; } }
+/* PWA standalone: notch/statusbar safe area */
+@media(display-mode:standalone){
+  header{ padding-top:max(env(safe-area-inset-top),12px);
+          height:calc(52px + max(env(safe-area-inset-top),12px));
+          min-height:calc(52px + max(env(safe-area-inset-top),12px)); }
+  .panel-left{ top:calc(52px + max(env(safe-area-inset-top),12px)); }
+  .drawer-overlay{ top:calc(52px + max(env(safe-area-inset-top),12px)); }
+  .main{ padding-bottom:env(safe-area-inset-bottom,0px); }
+}
 </style>
 </head>
 <body>

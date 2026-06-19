@@ -31,10 +31,12 @@ body {
   color: var(--text);
   font-family: 'Segoe UI', system-ui, sans-serif;
   min-height: 100vh;
+  min-height: 100dvh;
   display: flex;
   align-items: center;
   justify-content: center;
   overflow: hidden;
+  padding: env(safe-area-inset-top,0px) env(safe-area-inset-right,0px) env(safe-area-inset-bottom,0px) env(safe-area-inset-left,0px);
 }
 
 /* ── Animated grid background ───────────────────────────── */
@@ -157,6 +159,12 @@ body {
 
 /* ── Footer ─────────────────────────────────────────────── */
 .card-footer { margin-top:22px; text-align:center; font-size:10px; color:var(--dim); letter-spacing:1px; }
+
+/* PWA standalone: thêm padding cho notch */
+@media(display-mode:standalone){
+  body{ padding-top:max(env(safe-area-inset-top),8px); }
+  .card{ margin-top:env(safe-area-inset-top,0px); }
+}
 
 /* ── RESPONSIVE ──────────────────────── */
 @media(max-width:479px){
